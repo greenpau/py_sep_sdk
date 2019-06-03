@@ -1,0 +1,182 @@
+#!/bin/python
+# -*- coding: utf-8 -*-
+
+'''
+This tool queries information from Symantec Endpoint
+Protection Manager via API.
+'''
+
+from __future__ import (absolute_import, division, print_function)
+
+import os
+import sys
+import argparse
+import json
+import yaml
+import py_sep_sdk
+
+__author__ = "Paul Greenberg @greenpau"
+__version__ = "1.0"
+__maintainer__ = "Paul Greenberg"
+__email__ = "greenpau@outlook.com"
+__status__ = "Alpha"
+
+def main():
+    '''
+    Main function.
+    '''
+    descr = str(os.path.basename(__file__)) + ' - Symantec EPM API Client \n\n'
+    epil = '\ndocumentation: https://github.com/greenpau/py_sep_sdk\n\n'
+    parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     add_help=True, description=descr, epilog=epil)
+    main_group = parser.add_argument_group(None)
+    main_group.add_argument('-i', metavar='FILE', dest='input_computers', type=argparse.FileType('r'),
+                            #required=True,
+                            default=sys.stdin,
+                            help='Read from input file (or stdin); only works with non-liver queries')
+    main_group.add_argument('-o', metavar='output', dest='output', type=argparse.FileType('w'),
+                            default=sys.stdout, help='Write to output file (or stdout)')
+    main_group.add_argument('--manager', metavar='manager', dest='manager',
+                            help='SEP Manager IP address or name')
+    action_arg_group = parser.add_argument_group('Available Actions')
+    action_group = action_arg_group.add_mutually_exclusive_group(required=True)
+    action_group.add_argument('--get-version', dest='get_version', action='store_true',
+                              help='performs live query for API version')
+    action_group.add_argument('--get-domains', dest='get_domains', action='store_true',
+                              help='performs live query for domains')
+    action_group.add_argument('--get-groups', dest='get_groups', action='store_true',
+                              help='performs live query for groups')
+    action_group.add_argument('--get-computers', dest='get_computers', action='store_true',
+                              help='performs live query for computers')
+    action_group.add_argument('--get-licenses', dest='get_licenses', action='store_true',
+                              help='performs live query for licenses')
+    action_group.add_argument('--get-policies', dest='get_policies', action='store_true',
+                              help='performs live query for policies')
+    action_group.add_argument('--get-admin-users', dest='get_admin_users', action='store_true',
+                              help='performs live query for admin users')
+
+    action_group.add_argument('--delete-agent', dest='delete_agent', metavar="AGENT_ID",
+                              help='deletes an agent from SEPM by its ID')
+
+    action_group.add_argument('--get-prometheus-metrics', dest='get_prometheus_metrics', action='store_true',
+                              help='output Prometheus metrics')
+
+    action_group.add_argument('--dump-agents', dest='dump_agents', action='store_true',
+                              help='dumps agents')
+    action_group.add_argument('--dump-operating-systems', dest='dump_operating_systems', action='store_true',
+                              help='dumps operating system types for the agents')
+    action_group.add_argument('--dump-windows-server-agents', dest='dump_windows_server_agents', action='store_true',
+                              help='dumps agents with Windows Server OS')
+    action_group.add_argument('--dump-duplicate-agents', dest='dump_duplicate_agents', action='store_true',
+                              help='dumps duplicate agents')
+
+    action_group.add_argument('--dump-agent-info', dest='dump_agent_info', action='store_true',
+                              help='dumps agent information')
+
+    action_group.add_argument('--check-data', dest='check_data', action='store_true',
+                              help='checks the quality of input data')
+
+    main_group.add_argument('--filter', dest='obj_filters', metavar='KEY:VALUE',
+                            action='append', help='Object filters, e.g. ip:1.1.1.1, name:nysrv1')
+
+    main_group.add_argument('--format', dest='output_fmt', choices=['json', 'csv', 'yaml'],
+                            default="json", help='Output format')
+
+    main_group.add_argument('--cron', dest='enable_cron', action='store_true',
+                            help='Set for cronjobs')
+
+    main_group.add_argument('--debug', dest='enable_debug', action='store_true',
+                              help='Enable debugging')
+    args = parser.parse_args()
+    
+    cli = py_sep_sdk.client.new_client()
+    if args.enable_debug:
+        cli.debug()
+    cli.config.load()
+    cli.config.validate()
+    if args.manager:
+        cli.config.settings['host'] = args.manager
+    data = None
+
+    if args.input_computers.isatty() or args.enable_cron:
+        if args.get_version:
+            data = cli.get_version()
+        elif args.get_domains:
+            data = cli.get_domains()
+        elif args.get_groups:
+            data = cli.get_groups()
+        elif args.get_computers:
+            computers = cli.get_computers()
+            db = py_sep_sdk.database.new()
+            if args.enable_debug:
+                db.debug()
+            db.add_computer_data(computers)
+            db.set_manager(cli.config.settings['host'])
+            data = db.get_computers()
+        elif args.get_licenses:
+            data = cli.get_licenses()
+        elif args.get_policies:
+            data = cli.get_policies()
+        elif args.get_admin_users:
+            data = cli.get_admin_users()
+        elif args.delete_agent:
+            data = cli.delete_agent(args.delete_agent)
+        elif args.get_prometheus_metrics:
+            computers = cli.get_computers()
+            args.output_fmt = 'plain'
+            db = py_sep_sdk.database.new()
+            if args.enable_debug:
+                db.debug()
+            db.add_computer_data(computers)
+            db.set_manager(cli.config.settings['host'])
+            data = db.get_prometheus_metrics()
+        else:
+            raise Exception('parser', 'unsupported arguments')
+
+        if args.output_fmt == 'yaml':
+            yaml.dump(data, args.output, default_flow_style=False)
+        elif args.output_fmt in ['csv', 'plain']:
+            args.output.write(data)
+        else:
+            json.dump(data, args.output, sort_keys=True, indent=4, separators=(',', ': '))
+
+        return
+
+    if args.input_computers:
+        db = py_sep_sdk.database.new()
+        if args.enable_debug:
+            db.debug()
+        db.add_computer_data(args.input_computers)
+        if args.check_data:
+            db.check_data()
+            return
+        db.output_fmt = args.output_fmt
+        if args.dump_agents:
+            data = db.get_agents()
+        elif args.dump_windows_server_agents:
+            data = db.get_agents('windows-server')
+        elif args.dump_operating_systems:
+            data = db.get_operating_systems()
+        elif args.dump_duplicate_agents:
+            data = db.get_duplicate_agents()
+        elif args.dump_agent_info:
+            args.obj_filters.append('dump:true')
+            data = db.get_agents(agent_filters=args.obj_filters)
+        elif args.get_prometheus_metrics:
+            db.set_manager(cli.config.settings['host'])
+            args.output_fmt = 'plain'
+            data = db.get_prometheus_metrics()
+        else:
+            raise Exception('parser', 'unsupported arguments')
+
+        if args.output_fmt == 'yaml':
+            yaml.dump(data, args.output, default_flow_style=False)
+        elif args.output_fmt in ['csv', 'plain']:
+            args.output.write(data)
+        else:
+            json.dump(data, args.output, sort_keys=True, indent=4, separators=(',', ': '))
+    return
+
+
+if __name__ == '__main__':
+    main()
